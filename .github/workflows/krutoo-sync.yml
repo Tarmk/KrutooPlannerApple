@@ -28,6 +28,8 @@ jobs:
           ICLOUD_USERNAME: ${{ secrets.ICLOUD_USERNAME }}
           ICLOUD_APP_PASSWORD: ${{ secrets.ICLOUD_APP_PASSWORD }}
           ICLOUD_CALENDAR_NAME: ${{ secrets.ICLOUD_CALENDAR_NAME }}
+          PLAYWRIGHT_STORAGE_STATE: C:\\actions-runner\\storage_state.json
+          PLAYWRIGHT_HEADLESS: true
         run: |
           py -3.11 -c "from sync.main import run_sync; run_sync()"
       - name: Upload artifacts (screens and html)
