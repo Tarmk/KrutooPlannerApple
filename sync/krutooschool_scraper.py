@@ -88,47 +88,47 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
         page.fill('input[type="password"]', password)
         # Explicit double-submit flow as requested
         def do_one_submit():
-            # Try multiple click methods
-            for selector in [
+            # Try multiple visible button selectors only (no Enter, no form.submit)
+            button_selectors = [
                 'button:has-text("SIGN IN")',
                 'button:has-text("Sign in")',
-                'input[type="submit"]',
-                'button[type="submit"]',
-            ]:
+                'button:has-text("LOGIN")',
+                'button:has-text("Login")',
+                'role=button[name=/sign in|login|เข้าสู่ระบบ/i]'
+            ]
+            for selector in button_selectors:
                 try:
-                    page.click(selector, timeout=2000)
+                    page.locator(selector).first.scroll_into_view_if_needed(timeout=2000)
+                    page.locator(selector).first.click(timeout=3000)
                     return True
                 except Exception:
                     continue
-            try:
-                page.locator('text=SIGN IN').first.click(force=True, timeout=2000)
-                return True
-            except Exception:
-                pass
-            try:
-                btn = page.locator('button:has-text("SIGN IN")').first
-                btn.scroll_into_view_if_needed(timeout=2000)
-                box = btn.bounding_box()
-                if box:
-                    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-                    page.mouse.down(); page.mouse.up()
-                    return True
-            except Exception:
-                pass
+            # Low-level mouse click on best-guess button element
+            for guess in [
+                'button[type="submit"]',
+                'button:has-text("SIGN IN")',
+                'button:has-text("Login")',
+            ]:
+                try:
+                    btn = page.locator(guess).first
+                    btn.scroll_into_view_if_needed(timeout=2000)
+                    box = btn.bounding_box()
+                    if box:
+                        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                        page.mouse.down(); page.mouse.up()
+                        return True
+                except Exception:
+                    continue
+            # JS dispatch click on any matching button by text content
             try:
                 page.evaluate(
-                    "() => { const el = document.querySelector('button[type=submit], button:has-text(\\'SIGN IN\\')'); if (el) el.click(); }"
+                    "() => {\n"
+                    "  const candidates = Array.from(document.querySelectorAll('button, [role=button]'));\n"
+                    "  const re = /(sign in|login|เข้าสู่ระบบ)/i;\n"
+                    "  const el = candidates.find(e => re.test((e.innerText||'') + ' ' + (e.ariaLabel||'')));\n"
+                    "  if (el) { el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true})); }\n"
+                    "}"
                 )
-                return True
-            except Exception:
-                pass
-            try:
-                page.locator('input[type="password"]').press('Enter')
-                return True
-            except Exception:
-                pass
-            try:
-                page.evaluate("() => { const f = document.querySelector('form'); if (f) f.submit(); }")
                 return True
             except Exception:
                 return False
