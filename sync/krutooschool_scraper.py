@@ -180,6 +180,56 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                 page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
                 _snapshot(page, "02-after-profile-nav")
 
+        # If signed in, immediately try to click Show List and parse; do not touch login inputs
+        if signed_in:
+            # Accept cookies again if shown
+            for txt in ["Accept", "I agree", "ตกลง", "ยอมรับ"]:
+                try:
+                    page.click(f'button:has-text("{txt}")', timeout=1500)
+                    break
+                except Exception:
+                    continue
+            # Try Show List
+            clicked_list = False
+            for selector in [
+                'button:has-text("Show List")',
+                'text=Show List',
+                'a:has-text("Show List")',
+                'a[role="button"]:has-text("Show List")',
+            ]:
+                try:
+                    page.click(selector, timeout=4000)
+                    clicked_list = True
+                    break
+                except Exception:
+                    continue
+            # If disabled, attempt to set a default date range via DOM and re-click
+            if not clicked_list:
+                try:
+                    page.evaluate(
+                        "() => {\n"
+                        "  const btn = Array.from(document.querySelectorAll('button, [role=button]')).find(b => /show list/i.test((b.innerText||'') + ' ' + (b.ariaLabel||'')));\n"
+                        "  if (btn && (btn.disabled || btn.getAttribute('disabled')!==null)) {\n"
+                        "    // Try enable by simulating date selection\n"
+                        "    const [start, end] = Array.from(document.querySelectorAll('input[type=date], input[name*=start i], input[name*=end i]'));\n"
+                        "    const today = new Date();\n"
+                        "    const pad = n => String(n).padStart(2,'0');\n"
+                        "    const iso = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;\n"
+                        "    if (start) start.value = iso(today);\n"
+                        "    const d2 = new Date(today); d2.setDate(d2.getDate()+30);\n"
+                        "    if (end) end.value = iso(d2);\n"
+                        "    btn.disabled = false; btn.removeAttribute('disabled');\n"
+                        "  }\n"
+                        "}"
+                    )
+                    page.click('button:has-text("Show List")', timeout=4000)
+                    clicked_list = True
+                except Exception:
+                    pass
+            _snapshot(page, "03-before-wait-table")
+            page.wait_for_selector("table", timeout=60000)
+            _snapshot(page, "04-table-visible")
+
         # Persist session if login succeeded
         if signed_in:
             try:
