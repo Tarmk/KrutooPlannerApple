@@ -65,9 +65,17 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
         page.goto("https://krutooschool.com/", wait_until="domcontentloaded")
         _snapshot(page, "00-login-loaded")
         # If storage state exists, skip form and go straight to profile
+        signed_in = False
         if os.path.exists(storage_state_path):
             try:
                 page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
+                # Accept cookies if banner blocks buttons
+                for txt in ["Accept", "I agree", "ตกลง", "ยอมรับ"]:
+                    try:
+                        page.click(f'button:has-text("{txt}")', timeout=2000)
+                        break
+                    except Exception:
+                        continue
                 page.wait_for_selector('button:has-text("Show Timetable"), button:has-text("Show List")', timeout=10000)
                 _snapshot(page, "00a-storage-state-profile")
                 # Save refreshed state to keep session alive
@@ -75,10 +83,9 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                     context.storage_state(path=storage_state_path)
                 except Exception:
                     pass
-                # Proceed to data scraping without running login flow
-                pass
+                signed_in = True
             except Exception:
-                pass
+                signed_in = False
 
         # Dismiss cookie banner if present (text-based selector)
         for txt in ["Accept", "I agree", "ตกลง", "ยอมรับ"]:
@@ -89,12 +96,13 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                 continue
 
         # Login (robust selectors)
-        try:
-            page.fill('input[type="email"]', username, timeout=10000)
-        except Exception:
-            # Fallback: first text input
-            page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
-        page.fill('input[type="password"]', password)
+        if not signed_in:
+            try:
+                page.fill('input[type="email"]', username, timeout=10000)
+            except Exception:
+                # Fallback: first text input
+                page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
+            page.fill('input[type="password"]', password)
         # Explicit double-submit flow as requested
         def do_one_submit():
             # Try multiple visible button selectors only (no Enter, no form.submit)
@@ -142,28 +150,28 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
             except Exception:
                 return False
 
-        # First attempt
-        do_one_submit()
-        _snapshot(page, "01a-after-first-submit")
-        page.wait_for_timeout(3000)
-        # Refill and submit again
-        try:
-            page.fill('input[type="email"]', username, timeout=3000)
-        except Exception:
+        if not signed_in:
+            # First attempt
+            do_one_submit()
+            _snapshot(page, "01a-after-first-submit")
+            page.wait_for_timeout(3000)
+            # Refill and submit again
             try:
-                page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
+                page.fill('input[type="email"]', username, timeout=3000)
+            except Exception:
+                try:
+                    page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
+                except Exception:
+                    pass
+            try:
+                page.fill('input[type="password"]', password, timeout=3000)
             except Exception:
                 pass
-        try:
-            page.fill('input[type="password"]', password, timeout=3000)
-        except Exception:
-            pass
-        do_one_submit()
-        _snapshot(page, "01b-after-second-submit")
+            do_one_submit()
+            _snapshot(page, "01b-after-second-submit")
 
         # Wait for signs of authenticated app instead of strict URL
-        signed_in = False
-        for _ in range(2):  # try twice, second time after direct navigation
+        for _ in range(2 if not signed_in else 1):  # retry only if we had to log in
             try:
                 page.wait_for_selector('a:has-text("Timetable"), button:has-text("Show Timetable"), button:has-text("Show List")', timeout=30000)
                 signed_in = True
