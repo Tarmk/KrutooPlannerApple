@@ -14,16 +14,13 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
-      - name: Check Python
-        run: |
-          python --version
       - name: Install Python deps
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt icalendar
+          py -3.11 -m pip install --upgrade pip
+          py -3.11 -m pip install -r requirements.txt icalendar
       - name: Install Playwright browsers (Windows)
         run: |
-          python -m playwright install chromium
+          py -3.11 -m playwright install chromium
       - name: Run sync
         env:
           KRUTOO_USERNAME: ${{ secrets.KRUTOO_USERNAME }}
@@ -32,7 +29,7 @@ jobs:
           ICLOUD_APP_PASSWORD: ${{ secrets.ICLOUD_APP_PASSWORD }}
           ICLOUD_CALENDAR_NAME: ${{ secrets.ICLOUD_CALENDAR_NAME }}
         run: |
-          python -c "from sync.main import run_sync; run_sync()"
+          py -3.11 -c "from sync.main import run_sync; run_sync()"
       - name: Upload artifacts (screens and html)
         if: always()
         uses: actions/upload-artifact@v4
