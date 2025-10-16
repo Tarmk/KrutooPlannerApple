@@ -40,6 +40,11 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(timezone_id="Asia/Bangkok")
+        # Start tracing to collect network + DOM steps
+        try:
+            context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        except Exception:
+            pass
         page = context.new_page()
         page.goto("https://krutooschool.com/", wait_until="domcontentloaded")
         _snapshot(page, "00-login-loaded")
@@ -162,6 +167,22 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                 pass
 
         _snapshot(page, "03-before-wait-table")
+        # Capture any visible error message around the form, if table isn't present
+        try:
+            err_texts = []
+            for sel in [
+                ".error, .alert, .text-danger, .validation-message", 
+                "form >> text=/invalid|incorrect|timeout|session|error/i"
+            ]:
+                for el in page.locator(sel).all():
+                    err_texts.append(el.inner_text())
+            if err_texts:
+                os.makedirs("artifacts", exist_ok=True)
+                with open("artifacts/errors.txt", "w", encoding="utf-8") as f:
+                    f.write("\n".join(err_texts))
+        except Exception:
+            pass
+
         page.wait_for_selector("table", timeout=60000)
         _snapshot(page, "04-table-visible")
 
@@ -170,6 +191,11 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
             page.mouse.wheel(0, 2000)
 
         html = page.content()
+        try:
+            os.makedirs("artifacts", exist_ok=True)
+            context.tracing.stop(path="artifacts/trace.zip")
+        except Exception:
+            pass
         browser.close()
 
     soup = BeautifulSoup(html, "html.parser")
