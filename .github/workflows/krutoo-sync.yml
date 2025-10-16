@@ -1,0 +1,36 @@
+name: Krutoo Sync
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: krutoo-sync
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt icalendar
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install --with-deps chromium
+      - name: Run sync
+        env:
+          KRUTOO_USERNAME: ${{ secrets.KRUTOO_USERNAME }}
+          KRUTOO_PASSWORD: ${{ secrets.KRUTOO_PASSWORD }}
+          ICLOUD_USERNAME: ${{ secrets.ICLOUD_USERNAME }}
+          ICLOUD_APP_PASSWORD: ${{ secrets.ICLOUD_APP_PASSWORD }}
+          ICLOUD_CALENDAR_NAME: ${{ secrets.ICLOUD_CALENDAR_NAME }}
+        run: |
+          python -c "from sync.main import run_sync; run_sync()"
+
