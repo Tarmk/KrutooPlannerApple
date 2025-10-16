@@ -31,15 +31,44 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(timezone_id="Asia/Bangkok")
         page = context.new_page()
-        page.goto("https://krutooschool.com/")
-        # Login
-        page.fill('input[type="email"]', username)
+        page.goto("https://krutooschool.com/", wait_until="domcontentloaded")
+        # Dismiss cookie banner if present
+        try:
+            page.get_by_role("button", name=lambda s: s and "accept" in s.lower()).click(timeout=3000)
+        except Exception:
+            pass
+
+        # Login (robust selectors)
+        try:
+            page.fill('input[type="email"]', username, timeout=10000)
+        except Exception:
+            # Fallback: first text input
+            page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
         page.fill('input[type="password"]', password)
-        page.click('button:has-text("SIGN IN")')
-        page.wait_for_url("**/profile/**", timeout=30000)
+        # Try multiple ways to submit
+        clicked = False
+        for selector in [
+            'button:has-text("SIGN IN")',
+            'button:has-text("Sign in")',
+            'input[type="submit"]',
+            'button[type="submit"]',
+        ]:
+            try:
+                page.click(selector, timeout=3000)
+                clicked = True
+                break
+            except Exception:
+                continue
+        if not clicked:
+            page.keyboard.press("Enter")
+
+        page.wait_for_url("**/profile/**", timeout=60000)
 
         # Click Show List
-        page.click('button:has-text("Show List")')
+        try:
+            page.get_by_role("button", name=lambda s: s and "show list" in s.lower()).click(timeout=5000)
+        except Exception:
+            page.click('button:has-text("Show List")')
         page.wait_for_selector("table", timeout=30000)
 
         # Ensure all rows are loaded (if virtualized, try scrolling)
