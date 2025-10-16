@@ -18,3 +18,9 @@ python -c "from sync.main import run_sync; run_sync()"
 
 All times use Asia/Bangkok.
 
+## Git hygiene
+Add these to your global/local `.gitignore` if not already present:
+- Python caches: `**/__pycache__/`, `*.pyc`
+- Playwright login state: `storage_state.json`
+- Debug artifacts directory: `artifacts/`
+

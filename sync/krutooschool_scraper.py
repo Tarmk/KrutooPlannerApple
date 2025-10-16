@@ -86,72 +86,71 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
             # Fallback: first text input
             page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
         page.fill('input[type="password"]', password)
-        # Submit strategies (multiple fallbacks)
-        submitted = False
-        # 1) Click common submit selectors
-        for selector in [
-            'button:has-text("SIGN IN")',
-            'button:has-text("Sign in")',
-            'input[type="submit"]',
-            'button[type="submit"]',
-        ]:
-            try:
-                page.click(selector, timeout=2000)
-                submitted = True
-                break
-            except Exception:
-                continue
-        _snapshot(page, "01a-after-click-submit")
-        # 2) Press Enter on password input
-        if not submitted:
-            try:
-                page.locator('input[type="password"]').press('Enter')
-                submitted = True
-            except Exception:
-                pass
-        _snapshot(page, "01b-after-enter")
-        # 3) Force click by text
-        if not submitted:
+        # Explicit double-submit flow as requested
+        def do_one_submit():
+            # Try multiple click methods
+            for selector in [
+                'button:has-text("SIGN IN")',
+                'button:has-text("Sign in")',
+                'input[type="submit"]',
+                'button[type="submit"]',
+            ]:
+                try:
+                    page.click(selector, timeout=2000)
+                    return True
+                except Exception:
+                    continue
             try:
                 page.locator('text=SIGN IN').first.click(force=True, timeout=2000)
-                submitted = True
+                return True
             except Exception:
                 pass
-        _snapshot(page, "01c-after-force-click")
-        # 4) Low-level mouse click at element center
-        if not submitted:
             try:
                 btn = page.locator('button:has-text("SIGN IN")').first
                 btn.scroll_into_view_if_needed(timeout=2000)
                 box = btn.bounding_box()
                 if box:
                     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-                    page.mouse.down()
-                    page.mouse.up()
-                    submitted = True
+                    page.mouse.down(); page.mouse.up()
+                    return True
             except Exception:
                 pass
-        _snapshot(page, "01d-after-mouse-click")
-        # 5) Direct DOM click via JS (bubbles through frameworks)
-        if not submitted:
             try:
                 page.evaluate(
                     "() => { const el = document.querySelector('button[type=submit], button:has-text(\\'SIGN IN\\')'); if (el) el.click(); }"
                 )
-                submitted = True
+                return True
             except Exception:
                 pass
-        _snapshot(page, "01e-after-dom-click")
-        # 6) Direct form submit via JS
-        if not submitted:
             try:
-                page.evaluate(
-                    "() => { const f = document.querySelector('form'); if (f) f.submit(); }"
-                )
-                submitted = True
+                page.locator('input[type="password"]').press('Enter')
+                return True
             except Exception:
                 pass
-        _snapshot(page, "01f-after-form-submit")
+            try:
+                page.evaluate("() => { const f = document.querySelector('form'); if (f) f.submit(); }")
+                return True
+            except Exception:
+                return False
+
+        # First attempt
+        do_one_submit()
+        _snapshot(page, "01a-after-first-submit")
+        page.wait_for_timeout(3000)
+        # Refill and submit again
+        try:
+            page.fill('input[type="email"]', username, timeout=3000)
+        except Exception:
+            try:
+                page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
+            except Exception:
+                pass
+        try:
+            page.fill('input[type="password"]', password, timeout=3000)
+        except Exception:
+            pass
+        do_one_submit()
+        _snapshot(page, "01b-after-second-submit")
 
         # Wait for signs of authenticated app instead of strict URL
         signed_in = False
