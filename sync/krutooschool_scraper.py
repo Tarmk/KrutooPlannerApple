@@ -58,8 +58,9 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
             # Fallback: first text input
             page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
         page.fill('input[type="password"]', password)
-        # Submit strategies
+        # Submit strategies (multiple fallbacks)
         submitted = False
+        # 1) Click common submit selectors
         for selector in [
             'button:has-text("SIGN IN")',
             'button:has-text("Sign in")',
@@ -67,14 +68,38 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
             'button[type="submit"]',
         ]:
             try:
-                page.click(selector, timeout=3000)
+                page.click(selector, timeout=2000)
                 submitted = True
                 break
             except Exception:
                 continue
+        _snapshot(page, "01a-after-click-submit")
+        # 2) Press Enter on password input
         if not submitted:
-            page.keyboard.press("Enter")
-        _snapshot(page, "01-after-submit")
+            try:
+                page.locator('input[type="password"]').press('Enter')
+                submitted = True
+            except Exception:
+                pass
+        _snapshot(page, "01b-after-enter")
+        # 3) Force click by text
+        if not submitted:
+            try:
+                page.locator('text=SIGN IN').first.click(force=True, timeout=2000)
+                submitted = True
+            except Exception:
+                pass
+        _snapshot(page, "01c-after-force-click")
+        # 4) Direct form submit via JS
+        if not submitted:
+            try:
+                page.evaluate(
+                    "() => { const f = document.querySelector('form'); if (f) f.submit(); }"
+                )
+                submitted = True
+            except Exception:
+                pass
+        _snapshot(page, "01d-after-form-submit")
 
         # Wait for signs of authenticated app instead of strict URL
         signed_in = False
