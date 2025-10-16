@@ -90,7 +90,31 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
             except Exception:
                 pass
         _snapshot(page, "01c-after-force-click")
-        # 4) Direct form submit via JS
+        # 4) Low-level mouse click at element center
+        if not submitted:
+            try:
+                btn = page.locator('button:has-text("SIGN IN")').first
+                btn.scroll_into_view_if_needed(timeout=2000)
+                box = btn.bounding_box()
+                if box:
+                    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                    page.mouse.down()
+                    page.mouse.up()
+                    submitted = True
+            except Exception:
+                pass
+        _snapshot(page, "01d-after-mouse-click")
+        # 5) Direct DOM click via JS (bubbles through frameworks)
+        if not submitted:
+            try:
+                page.evaluate(
+                    "() => { const el = document.querySelector('button[type=submit], button:has-text(\\'SIGN IN\\')'); if (el) el.click(); }"
+                )
+                submitted = True
+            except Exception:
+                pass
+        _snapshot(page, "01e-after-dom-click")
+        # 6) Direct form submit via JS
         if not submitted:
             try:
                 page.evaluate(
@@ -99,7 +123,7 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                 submitted = True
             except Exception:
                 pass
-        _snapshot(page, "01d-after-form-submit")
+        _snapshot(page, "01f-after-form-submit")
 
         # Wait for signs of authenticated app instead of strict URL
         signed_in = False
