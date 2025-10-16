@@ -33,4 +33,11 @@ jobs:
           ICLOUD_CALENDAR_NAME: ${{ secrets.ICLOUD_CALENDAR_NAME }}
         run: |
           python -c "from sync.main import run_sync; run_sync()"
+      - name: Upload artifacts (screens and html)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: krutoo-debug-artifacts
+          path: artifacts
+          if-no-files-found: ignore
 
