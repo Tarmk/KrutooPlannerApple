@@ -38,8 +38,17 @@ def _snapshot(page, name: str) -> None:
 
 def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(timezone_id="Asia/Bangkok")
+        storage_state_path = os.environ.get("PLAYWRIGHT_STORAGE_STATE", "storage_state.json")
+        headless = os.environ.get("PLAYWRIGHT_HEADLESS", "true").lower() != "false"
+        browser = p.chromium.launch(headless=headless, args=[
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+        ])
+        context_kwargs = dict(timezone_id="Asia/Bangkok")
+        if os.path.exists(storage_state_path):
+            context_kwargs["storage_state"] = storage_state_path
+        context = browser.new_context(**context_kwargs)
         # Start tracing to collect network + DOM steps
         try:
             context.tracing.start(screenshots=True, snapshots=True, sources=True)
@@ -48,6 +57,20 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
         page = context.new_page()
         page.goto("https://krutooschool.com/", wait_until="domcontentloaded")
         _snapshot(page, "00-login-loaded")
+        # If storage state exists, try going straight to profile
+        if os.path.exists(storage_state_path):
+            try:
+                page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
+                page.wait_for_selector('button:has-text("Show Timetable"), button:has-text("Show List")', timeout=10000)
+                _snapshot(page, "00a-storage-state-profile")
+                # Save refreshed state to keep session alive
+                try:
+                    context.storage_state(path=storage_state_path)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
         # Dismiss cookie banner if present (text-based selector)
         for txt in ["Accept", "I agree", "ตกลง", "ยอมรับ"]:
             try:
@@ -140,6 +163,13 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
             except Exception:
                 page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
                 _snapshot(page, "02-after-profile-nav")
+
+        # Persist session if login succeeded
+        if signed_in:
+            try:
+                context.storage_state(path=storage_state_path)
+            except Exception:
+                pass
 
         # Click Show List
         # Try to click Show List when available
