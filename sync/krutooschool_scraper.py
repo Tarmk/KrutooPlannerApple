@@ -191,6 +191,8 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                     continue
             # Try Show List
             clicked_list = False
+            print("[Krutoo] Attempting to click 'Show List' ...")
+            _snapshot(page, "10-before-click-show-list")
             for selector in [
                 'button:has-text("Show List")',
                 'text=Show List',
@@ -198,8 +200,16 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                 'a[role="button"]:has-text("Show List")',
             ]:
                 try:
+                    # Wait for button to be enabled if possible
+                    try:
+                        btn = page.locator(selector).first
+                        btn.scroll_into_view_if_needed(timeout=1000)
+                        page.wait_for_function("el => !el.disabled", arg=btn.element_handle(), timeout=3000)
+                    except Exception:
+                        pass
                     page.click(selector, timeout=4000)
                     clicked_list = True
+                    _snapshot(page, "11-after-click-show-list")
                     break
                 except Exception:
                     continue
@@ -224,11 +234,13 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                     )
                     page.click('button:has-text("Show List")', timeout=4000)
                     clicked_list = True
+                    _snapshot(page, "11a-after-click-show-list-enabled")
                 except Exception:
                     pass
-            _snapshot(page, "03-before-wait-table")
-            page.wait_for_selector("table", timeout=60000)
-            _snapshot(page, "04-table-visible")
+            print(f"[Krutoo] Clicked list: {clicked_list}")
+            _snapshot(page, "12-before-wait-table")
+            page.wait_for_selector("table, .ant-table, .MuiTable-root", timeout=60000)
+            _snapshot(page, "13-table-visible")
 
         # Persist session if login succeeded
         if signed_in:
