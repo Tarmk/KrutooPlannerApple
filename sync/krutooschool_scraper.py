@@ -38,7 +38,14 @@ def _snapshot(page, name: str) -> None:
 
 def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
     with sync_playwright() as p:
-        storage_state_path = os.environ.get("PLAYWRIGHT_STORAGE_STATE", "storage_state.json")
+        # Prefer explicit env var; otherwise, use common runner path on Windows if present; fallback to repo file
+        env_state = os.environ.get("PLAYWRIGHT_STORAGE_STATE")
+        runner_state = r"C:\actions-runner\storage_state.json"
+        storage_state_path = (
+            env_state
+            if env_state
+            else (runner_state if os.path.exists(runner_state) else "storage_state.json")
+        )
         headless = os.environ.get("PLAYWRIGHT_HEADLESS", "true").lower() != "false"
         browser = p.chromium.launch(headless=headless, args=[
             "--disable-blink-features=AutomationControlled",
@@ -57,7 +64,7 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
         page = context.new_page()
         page.goto("https://krutooschool.com/", wait_until="domcontentloaded")
         _snapshot(page, "00-login-loaded")
-        # If storage state exists, try going straight to profile
+        # If storage state exists, skip form and go straight to profile
         if os.path.exists(storage_state_path):
             try:
                 page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
@@ -68,6 +75,8 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                     context.storage_state(path=storage_state_path)
                 except Exception:
                     pass
+                # Proceed to data scraping without running login flow
+                pass
             except Exception:
                 pass
 
