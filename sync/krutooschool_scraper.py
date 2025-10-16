@@ -32,11 +32,13 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
         context = browser.new_context(timezone_id="Asia/Bangkok")
         page = context.new_page()
         page.goto("https://krutooschool.com/", wait_until="domcontentloaded")
-        # Dismiss cookie banner if present
-        try:
-            page.get_by_role("button", name=lambda s: s and "accept" in s.lower()).click(timeout=3000)
-        except Exception:
-            pass
+        # Dismiss cookie banner if present (text-based selector)
+        for txt in ["Accept", "I agree", "ตกลง", "ยอมรับ"]:
+            try:
+                page.click(f'button:has-text("{txt}")', timeout=2000)
+                break
+            except Exception:
+                continue
 
         # Login (robust selectors)
         try:
@@ -45,8 +47,8 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
             # Fallback: first text input
             page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
         page.fill('input[type="password"]', password)
-        # Try multiple ways to submit
-        clicked = False
+        # Submit strategies
+        submitted = False
         for selector in [
             'button:has-text("SIGN IN")',
             'button:has-text("Sign in")',
@@ -55,21 +57,41 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
         ]:
             try:
                 page.click(selector, timeout=3000)
-                clicked = True
+                submitted = True
                 break
             except Exception:
                 continue
-        if not clicked:
+        if not submitted:
             page.keyboard.press("Enter")
 
-        page.wait_for_url("**/profile/**", timeout=60000)
+        # Wait for either profile URL or presence of the app shell
+        try:
+            page.wait_for_url("**/profile/**", timeout=30000)
+        except Exception:
+            # Some sites use XHR login without navigation; try direct navigation
+            try:
+                page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
+            except Exception:
+                pass
 
         # Click Show List
-        try:
-            page.get_by_role("button", name=lambda s: s and "show list" in s.lower()).click(timeout=5000)
-        except Exception:
-            page.click('button:has-text("Show List")')
-        page.wait_for_selector("table", timeout=30000)
+        # Try to click Show List when available
+        clicked_list = False
+        for selector in [
+            'button:has-text("Show List")',
+            'text=Show List',
+        ]:
+            try:
+                page.click(selector, timeout=5000)
+                clicked_list = True
+                break
+            except Exception:
+                continue
+        if not clicked_list:
+            # Maybe it defaulted to list view already
+            pass
+
+        page.wait_for_selector("table", timeout=60000)
 
         # Ensure all rows are loaded (if virtualized, try scrolling)
         for _ in range(10):
