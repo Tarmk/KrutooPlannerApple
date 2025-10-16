@@ -26,12 +26,23 @@ def _parse_datetime(date_str: str, time_str: str) -> datetime:
     return dt
 
 
+def _snapshot(page, name: str) -> None:
+    try:
+        os.makedirs("artifacts", exist_ok=True)
+        page.screenshot(path=f"artifacts/{name}.png", full_page=True)
+        with open(f"artifacts/{name}.html", "w", encoding="utf-8") as f:
+            f.write(page.content())
+    except Exception:
+        pass
+
+
 def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(timezone_id="Asia/Bangkok")
         page = context.new_page()
         page.goto("https://krutooschool.com/", wait_until="domcontentloaded")
+        _snapshot(page, "00-login-loaded")
         # Dismiss cookie banner if present (text-based selector)
         for txt in ["Accept", "I agree", "ตกลง", "ยอมรับ"]:
             try:
@@ -63,6 +74,7 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                 continue
         if not submitted:
             page.keyboard.press("Enter")
+        _snapshot(page, "01-after-submit")
 
         # Wait for signs of authenticated app instead of strict URL
         signed_in = False
@@ -73,6 +85,7 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                 break
             except Exception:
                 page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
+                _snapshot(page, "02-after-profile-nav")
 
         # Click Show List
         # Try to click Show List when available
@@ -99,7 +112,9 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
             except Exception:
                 pass
 
+        _snapshot(page, "03-before-wait-table")
         page.wait_for_selector("table", timeout=60000)
+        _snapshot(page, "04-table-visible")
 
         # Ensure all rows are loaded (if virtualized, try scrolling)
         for _ in range(10):
