@@ -64,15 +64,15 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
         if not submitted:
             page.keyboard.press("Enter")
 
-        # Wait for either profile URL or presence of the app shell
-        try:
-            page.wait_for_url("**/profile/**", timeout=30000)
-        except Exception:
-            # Some sites use XHR login without navigation; try direct navigation
+        # Wait for signs of authenticated app instead of strict URL
+        signed_in = False
+        for _ in range(2):  # try twice, second time after direct navigation
             try:
-                page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
+                page.wait_for_selector('a:has-text("Timetable"), button:has-text("Show Timetable"), button:has-text("Show List")', timeout=30000)
+                signed_in = True
+                break
             except Exception:
-                pass
+                page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
 
         # Click Show List
         # Try to click Show List when available
@@ -80,6 +80,8 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
         for selector in [
             'button:has-text("Show List")',
             'text=Show List',
+            'a:has-text("Show List")',
+            'a[role="button"]:has-text("Show List")',
         ]:
             try:
                 page.click(selector, timeout=5000)
@@ -89,7 +91,13 @@ def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
                 continue
         if not clicked_list:
             # Maybe it defaulted to list view already
-            pass
+            # Ensure we're on Timetable page and try the other button
+            try:
+                page.click('a:has-text("Timetable")', timeout=3000)
+                page.click('button:has-text("Show List")', timeout=5000)
+                clicked_list = True
+            except Exception:
+                pass
 
         page.wait_for_selector("table", timeout=60000)
 
