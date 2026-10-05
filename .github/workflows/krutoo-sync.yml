@@ -1,8 +1,8 @@
 name: Krutoo Sync
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
+  # The 15-minute schedule ran on a self-hosted Windows runner while I was
+  # still at KRUTOO. That runner is retired, so the sync is manual-only now.
   workflow_dispatch: {}
 
 jobs:
