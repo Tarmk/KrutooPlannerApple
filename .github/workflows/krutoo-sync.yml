@@ -17,7 +17,7 @@ jobs:
       - name: Install Python deps
         run: |
           py -3.11 -m pip install --upgrade pip
-          py -3.11 -m pip install -r requirements.txt icalendar
+          py -3.11 -m pip install -r requirements.txt
       - name: Install Playwright browsers (Windows)
         run: |
           py -3.11 -m playwright install chromium
@@ -31,7 +31,7 @@ jobs:
           PLAYWRIGHT_STORAGE_STATE: C:\\actions-runner\\storage_state.json
           PLAYWRIGHT_HEADLESS: true
         run: |
-          py -3.11 -c "from sync.main import run_sync; run_sync()"
+          py -3.11 -m sync.main
       - name: Upload artifacts (screens and html)
         if: always()
         uses: actions/upload-artifact@v4

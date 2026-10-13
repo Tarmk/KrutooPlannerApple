@@ -1,346 +1,151 @@
+"""Log in to krutooschool.com with Playwright and grab the timetable list as HTML."""
+
 from __future__ import annotations
 
-import hashlib
 import os
-from dataclasses import asdict
-from datetime import datetime
-from typing import Iterable, List
-
-from bs4 import BeautifulSoup
-from dateutil import parser as dateutil_parser
-import pytz
-from playwright.sync_api import sync_playwright
+from typing import List, Optional
 
 from .models import ClassEvent
+from .parse import parse_timetable
+
+SITE = "https://krutooschool.com/"
+PROFILE = "https://krutooschool.com/profile/"
+COOKIE_BUTTONS = ("Accept", "I agree", "ตกลง", "ยอมรับ")
+SUBMIT_BUTTONS = (
+    'button:has-text("SIGN IN")',
+    'button:has-text("Sign in")',
+    'button:has-text("LOGIN")',
+    'button:has-text("Login")',
+    'button[type="submit"]',
+)
+LOGGED_IN = 'a:has-text("Timetable"), button:has-text("Show Timetable"), button:has-text("Show List")'
+SHOW_LIST = ('button:has-text("Show List")', 'a:has-text("Show List")', "text=Show List")
+
+# If the Show List button is disabled because no date range is set, fill in today + 30 days.
+_ENABLE_SHOW_LIST_JS = """
+() => {
+  const btn = [...document.querySelectorAll('button, [role=button]')]
+    .find(b => /show list/i.test((b.innerText || '') + ' ' + (b.ariaLabel || '')));
+  if (!btn || !(btn.disabled || btn.hasAttribute('disabled'))) return;
+  const [start, end] = document.querySelectorAll('input[type=date], input[name*=start i], input[name*=end i]');
+  const iso = d => d.toISOString().slice(0, 10);
+  const today = new Date();
+  if (start) start.value = iso(today);
+  if (end) end.value = iso(new Date(today.getTime() + 30 * 86400000));
+  btn.disabled = false;
+  btn.removeAttribute('disabled');
+}
+"""
 
 
-BKK_TZ = pytz.timezone("Asia/Bangkok")
+class Scraper:
+    def __init__(self, page, artifacts_dir: Optional[str] = "artifacts") -> None:
+        self.page = page
+        self.artifacts_dir = artifacts_dir
 
-
-def _parse_datetime(date_str: str, time_str: str) -> datetime:
-    dt = dateutil_parser.parse(f"{date_str} {time_str}", dayfirst=False)
-    if dt.tzinfo is None:
-        dt = BKK_TZ.localize(dt)
-    else:
-        dt = dt.astimezone(BKK_TZ)
-    return dt
-
-
-def _snapshot(page, name: str) -> None:
-    try:
-        os.makedirs("artifacts", exist_ok=True)
-        page.screenshot(path=f"artifacts/{name}.png", full_page=True)
-        with open(f"artifacts/{name}.html", "w", encoding="utf-8") as f:
-            f.write(page.content())
-    except Exception:
-        pass
-
-
-def scrape_show_list(username: str, password: str) -> List[ClassEvent]:
-    with sync_playwright() as p:
-        # Prefer explicit env var; otherwise, use common runner path on Windows if present; fallback to repo file
-        env_state = os.environ.get("PLAYWRIGHT_STORAGE_STATE")
-        runner_state = r"C:\actions-runner\storage_state.json"
-        storage_state_path = (
-            env_state
-            if env_state
-            else (runner_state if os.path.exists(runner_state) else "storage_state.json")
-        )
-        headless = os.environ.get("PLAYWRIGHT_HEADLESS", "true").lower() != "false"
-        browser = p.chromium.launch(headless=headless, args=[
-            "--disable-blink-features=AutomationControlled",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-        ])
-        context_kwargs = dict(timezone_id="Asia/Bangkok")
-        if os.path.exists(storage_state_path):
-            context_kwargs["storage_state"] = storage_state_path
-        context = browser.new_context(**context_kwargs)
-        # Start tracing to collect network + DOM steps
+    def snapshot(self, name: str) -> None:
+        """Save a screenshot and the HTML, for debugging failed runs (git-ignored)."""
+        if not self.artifacts_dir:
+            return
         try:
-            context.tracing.start(screenshots=True, snapshots=True, sources=True)
+            os.makedirs(self.artifacts_dir, exist_ok=True)
+            base = os.path.join(self.artifacts_dir, name)
+            self.page.screenshot(path=f"{base}.png", full_page=True)
+            with open(f"{base}.html", "w", encoding="utf-8") as f:
+                f.write(self.page.content())
         except Exception:
             pass
-        page = context.new_page()
-        page.goto("https://krutooschool.com/", wait_until="domcontentloaded")
-        _snapshot(page, "00-login-loaded")
-        # If storage state exists, skip form and go straight to profile
-        signed_in = False
-        if os.path.exists(storage_state_path):
-            try:
-                page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
-                # Accept cookies if banner blocks buttons
-                for txt in ["Accept", "I agree", "ตกลง", "ยอมรับ"]:
-                    try:
-                        page.click(f'button:has-text("{txt}")', timeout=2000)
-                        break
-                    except Exception:
-                        continue
-                page.wait_for_selector('button:has-text("Show Timetable"), button:has-text("Show List")', timeout=10000)
-                _snapshot(page, "00a-storage-state-profile")
-                # Save refreshed state to keep session alive
-                try:
-                    context.storage_state(path=storage_state_path)
-                except Exception:
-                    pass
-                signed_in = True
-            except Exception:
-                signed_in = False
 
-        # Dismiss cookie banner if present (text-based selector)
-        for txt in ["Accept", "I agree", "ตกลง", "ยอมรับ"]:
+    def click_first(self, selectors, timeout: int = 3000) -> bool:
+        for selector in selectors:
             try:
-                page.click(f'button:has-text("{txt}")', timeout=2000)
-                break
-            except Exception:
-                continue
-
-        # Login (robust selectors)
-        if not signed_in:
-            try:
-                page.fill('input[type="email"]', username, timeout=10000)
-            except Exception:
-                # Fallback: first text input
-                page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
-            page.fill('input[type="password"]', password)
-        # Explicit double-submit flow as requested
-        def do_one_submit():
-            # Try multiple visible button selectors only (no Enter, no form.submit)
-            button_selectors = [
-                'button:has-text("SIGN IN")',
-                'button:has-text("Sign in")',
-                'button:has-text("LOGIN")',
-                'button:has-text("Login")',
-                'role=button[name=/sign in|login|เข้าสู่ระบบ/i]'
-            ]
-            for selector in button_selectors:
-                try:
-                    page.locator(selector).first.scroll_into_view_if_needed(timeout=2000)
-                    page.locator(selector).first.click(timeout=3000)
-                    return True
-                except Exception:
-                    continue
-            # Low-level mouse click on best-guess button element
-            for guess in [
-                'button[type="submit"]',
-                'button:has-text("SIGN IN")',
-                'button:has-text("Login")',
-            ]:
-                try:
-                    btn = page.locator(guess).first
-                    btn.scroll_into_view_if_needed(timeout=2000)
-                    box = btn.bounding_box()
-                    if box:
-                        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-                        page.mouse.down(); page.mouse.up()
-                        return True
-                except Exception:
-                    continue
-            # JS dispatch click on any matching button by text content
-            try:
-                page.evaluate(
-                    "() => {\n"
-                    "  const candidates = Array.from(document.querySelectorAll('button, [role=button]'));\n"
-                    "  const re = /(sign in|login|เข้าสู่ระบบ)/i;\n"
-                    "  const el = candidates.find(e => re.test((e.innerText||'') + ' ' + (e.ariaLabel||'')));\n"
-                    "  if (el) { el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true})); }\n"
-                    "}"
-                )
+                target = self.page.locator(selector).first
+                target.scroll_into_view_if_needed(timeout=timeout)
+                target.click(timeout=timeout)
                 return True
             except Exception:
-                return False
-
-        if not signed_in:
-            # First attempt
-            do_one_submit()
-            _snapshot(page, "01a-after-first-submit")
-            page.wait_for_timeout(3000)
-            # Refill and submit again
-            try:
-                page.fill('input[type="email"]', username, timeout=3000)
-            except Exception:
-                try:
-                    page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
-                except Exception:
-                    pass
-            try:
-                page.fill('input[type="password"]', password, timeout=3000)
-            except Exception:
-                pass
-            do_one_submit()
-            _snapshot(page, "01b-after-second-submit")
-
-        # Wait for signs of authenticated app instead of strict URL
-        for _ in range(2 if not signed_in else 1):  # retry only if we had to log in
-            try:
-                page.wait_for_selector('a:has-text("Timetable"), button:has-text("Show Timetable"), button:has-text("Show List")', timeout=30000)
-                signed_in = True
-                break
-            except Exception:
-                page.goto("https://krutooschool.com/profile/", wait_until="domcontentloaded")
-                _snapshot(page, "02-after-profile-nav")
-
-        # If signed in, immediately try to click Show List and parse; do not touch login inputs
-        if signed_in:
-            # Accept cookies again if shown
-            for txt in ["Accept", "I agree", "ตกลง", "ยอมรับ"]:
-                try:
-                    page.click(f'button:has-text("{txt}")', timeout=1500)
-                    break
-                except Exception:
-                    continue
-            # Try Show List
-            clicked_list = False
-            print("[Krutoo] Attempting to click 'Show List' ...")
-            _snapshot(page, "10-before-click-show-list")
-            for selector in [
-                'button:has-text("Show List")',
-                'text=Show List',
-                'a:has-text("Show List")',
-                'a[role="button"]:has-text("Show List")',
-            ]:
-                try:
-                    # Wait for button to be enabled if possible
-                    try:
-                        btn = page.locator(selector).first
-                        btn.scroll_into_view_if_needed(timeout=1000)
-                        page.wait_for_function("el => !el.disabled", arg=btn.element_handle(), timeout=3000)
-                    except Exception:
-                        pass
-                    page.click(selector, timeout=4000)
-                    clicked_list = True
-                    _snapshot(page, "11-after-click-show-list")
-                    break
-                except Exception:
-                    continue
-            # If disabled, attempt to set a default date range via DOM and re-click
-            if not clicked_list:
-                try:
-                    page.evaluate(
-                        "() => {\n"
-                        "  const btn = Array.from(document.querySelectorAll('button, [role=button]')).find(b => /show list/i.test((b.innerText||'') + ' ' + (b.ariaLabel||'')));\n"
-                        "  if (btn && (btn.disabled || btn.getAttribute('disabled')!==null)) {\n"
-                        "    // Try enable by simulating date selection\n"
-                        "    const [start, end] = Array.from(document.querySelectorAll('input[type=date], input[name*=start i], input[name*=end i]'));\n"
-                        "    const today = new Date();\n"
-                        "    const pad = n => String(n).padStart(2,'0');\n"
-                        "    const iso = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;\n"
-                        "    if (start) start.value = iso(today);\n"
-                        "    const d2 = new Date(today); d2.setDate(d2.getDate()+30);\n"
-                        "    if (end) end.value = iso(d2);\n"
-                        "    btn.disabled = false; btn.removeAttribute('disabled');\n"
-                        "  }\n"
-                        "}"
-                    )
-                    page.click('button:has-text("Show List")', timeout=4000)
-                    clicked_list = True
-                    _snapshot(page, "11a-after-click-show-list-enabled")
-                except Exception:
-                    pass
-            print(f"[Krutoo] Clicked list: {clicked_list}")
-            _snapshot(page, "12-before-wait-table")
-            page.wait_for_selector("table, .ant-table, .MuiTable-root", timeout=60000)
-            _snapshot(page, "13-table-visible")
-
-        # Persist session if login succeeded
-        if signed_in:
-            try:
-                context.storage_state(path=storage_state_path)
-            except Exception:
-                pass
-
-        # Click Show List
-        # Try to click Show List when available
-        clicked_list = False
-        for selector in [
-            'button:has-text("Show List")',
-            'text=Show List',
-            'a:has-text("Show List")',
-            'a[role="button"]:has-text("Show List")',
-        ]:
-            try:
-                page.click(selector, timeout=5000)
-                clicked_list = True
-                break
-            except Exception:
                 continue
-        if not clicked_list:
-            # Maybe it defaulted to list view already
-            # Ensure we're on Timetable page and try the other button
-            try:
-                page.click('a:has-text("Timetable")', timeout=3000)
-                page.click('button:has-text("Show List")', timeout=5000)
-                clicked_list = True
-            except Exception:
-                pass
+        return False
 
-        _snapshot(page, "03-before-wait-table")
-        # Capture any visible error message around the form, if table isn't present
+    def dismiss_cookies(self) -> None:
+        self.click_first([f'button:has-text("{text}")' for text in COOKIE_BUTTONS], timeout=1500)
+
+    def is_logged_in(self, timeout: int) -> bool:
         try:
-            err_texts = []
-            for sel in [
-                ".error, .alert, .text-danger, .validation-message", 
-                "form >> text=/invalid|incorrect|timeout|session|error/i"
-            ]:
-                for el in page.locator(sel).all():
-                    err_texts.append(el.inner_text())
-            if err_texts:
-                os.makedirs("artifacts", exist_ok=True)
-                with open("artifacts/errors.txt", "w", encoding="utf-8") as f:
-                    f.write("\n".join(err_texts))
+            self.page.wait_for_selector(LOGGED_IN, timeout=timeout)
+            return True
         except Exception:
-            pass
+            return False
 
-        page.wait_for_selector("table", timeout=60000)
-        _snapshot(page, "04-table-visible")
-
-        # Ensure all rows are loaded (if virtualized, try scrolling)
-        for _ in range(10):
-            page.mouse.wheel(0, 2000)
-
-        html = page.content()
+    def fill_credentials(self, username: str, password: str) -> None:
         try:
-            os.makedirs("artifacts", exist_ok=True)
-            context.tracing.stop(path="artifacts/trace.zip")
+            self.page.fill('input[type="email"]', username, timeout=10_000)
         except Exception:
-            pass
-        browser.close()
+            self.page.locator('input[type="text"], input[placeholder*="mail" i]').first.fill(username)
+        self.page.fill('input[type="password"]', password)
 
-    soup = BeautifulSoup(html, "html.parser")
-    table = soup.find("table")
-    if not table:
-        return []
+    def log_in(self, username: str, password: str) -> None:
+        # The login form often ignores the first submit, so try twice before giving up.
+        for attempt in (1, 2):
+            self.fill_credentials(username, password)
+            self.click_first(SUBMIT_BUTTONS)
+            if self.is_logged_in(timeout=15_000):
+                return
+            self.snapshot(f"login-attempt-{attempt}")
+            self.page.goto(PROFILE, wait_until="domcontentloaded")
+            if self.is_logged_in(timeout=5_000):
+                return
+        raise RuntimeError("Could not log in to krutooschool.com (see artifacts/ for screenshots).")
 
-    # Try to infer columns
-    headers = [th.get_text(strip=True).lower() for th in table.find_all("th")]
-    events: List[ClassEvent] = []
-    for tr in table.find("tbody").find_all("tr"):
-        tds = [td.get_text(strip=True) for td in tr.find_all("td")]
-        row = dict(zip(headers, tds))
+    def open_list(self) -> None:
+        self.dismiss_cookies()
+        if not self.click_first(SHOW_LIST, timeout=4000):
+            self.page.evaluate(_ENABLE_SHOW_LIST_JS)
+            if not self.click_first(SHOW_LIST, timeout=4000):
+                self.click_first(['a:has-text("Timetable")'])
+                self.click_first(SHOW_LIST, timeout=5000)
+        self.page.wait_for_selector("table", timeout=60_000)
+        for _ in range(10):  # make sure lazily rendered rows are loaded
+            self.page.mouse.wheel(0, 2000)
+
+
+def fetch_timetable_html(
+    username: str,
+    password: str,
+    storage_state: Optional[str] = None,
+    headless: bool = True,
+    artifacts_dir: Optional[str] = "artifacts",
+) -> str:
+    from playwright.sync_api import sync_playwright  # only needed when actually scraping
+
+    storage_state = storage_state or os.environ.get("PLAYWRIGHT_STORAGE_STATE") or "storage_state.json"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=headless,
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        context_args = {"timezone_id": "Asia/Bangkok"}
+        if os.path.exists(storage_state):
+            context_args["storage_state"] = storage_state
+        context = browser.new_context(**context_args)
+        scraper = Scraper(context.new_page(), artifacts_dir)
         try:
-            title = row.get("course") or row.get("subject") or row.get("event") or "Class"
-            date_str = row.get("date") or ""
-            start_str = row.get("start") or row.get("start time") or ""
-            end_str = row.get("end") or row.get("end time") or row.get("hour") or ""
-            # If hour is duration, we can't parse end; skip in that case
-            if len(end_str) <= 2 and end_str.isdigit():
-                continue
-            start_dt = _parse_datetime(date_str, start_str)
-            end_dt = _parse_datetime(date_str, end_str)
-            ev = ClassEvent(
-                title=title,
-                start_dt=start_dt,
-                end_dt=end_dt,
-                location=row.get("location"),
-                status=row.get("status"),
-                remark=row.get("remark"),
-                instructor=row.get("instructor"),
-                student=row.get("student"),
-                raw_id=row.get("#") or row.get("id"),
-            )
-            events.append(ev)
+            scraper.page.goto(PROFILE, wait_until="domcontentloaded")
+            scraper.dismiss_cookies()
+            if not scraper.is_logged_in(timeout=10_000):
+                scraper.page.goto(SITE, wait_until="domcontentloaded")
+                scraper.dismiss_cookies()
+                scraper.log_in(username, password)
+            scraper.open_list()
+            html = scraper.page.content()
+            context.storage_state(path=storage_state)  # keep the session for next time
+            return html
         except Exception:
-            continue
+            scraper.snapshot("failure")
+            raise
+        finally:
+            browser.close()
 
-    return events
 
+def scrape_show_list(username: str, password: str, **kwargs) -> List[ClassEvent]:
+    return parse_timetable(fetch_timetable_html(username, password, **kwargs))

@@ -1,64 +1,101 @@
+"""Write events into an iCloud calendar over CalDAV."""
+
 from __future__ import annotations
 
-import hashlib
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Dict, Iterable, Optional
 
-import caldav
-from caldav import Calendar
-from icalendar import Calendar as ICalendar, Event as ICEvent, vCalAddress, vText
-from datetime import datetime
+from icalendar import Calendar as ICalendar
+from icalendar import Event as ICEvent
 
 from .models import ClassEvent
 
-
-def _find_or_create_calendar(principal: caldav.Principal, name: Optional[str]) -> Calendar:
-    calendars = principal.calendars()
-    if name:
-        for cal in calendars:
-            props = cal.get_properties(["{DAV:}displayname"])  # type: ignore
-            if props.get("{DAV:}displayname") == name:
-                return cal
-        return principal.make_calendar(name)
-    return calendars[0]
+ICLOUD_URL = "https://caldav.icloud.com/"
 
 
-def _event_uid(ev: ClassEvent) -> str:
-    basis = ev.uid_basis().encode("utf-8")
-    return hashlib.sha1(basis).hexdigest() + "@krutoosync"
+@dataclass
+class SyncReport:
+    created: int = 0
+    updated: int = 0
+    unchanged: int = 0
+
+    def __str__(self) -> str:
+        return f"{self.created} created, {self.updated} updated, {self.unchanged} unchanged"
 
 
-def _serialize_event(ev: ClassEvent) -> ICalendar:
+def to_ical(event: ClassEvent) -> str:
     cal = ICalendar()
     cal.add("prodid", "-//Krutoo Sync//EN")
     cal.add("version", "2.0")
-    ice = ICEvent()
-    ice.add("uid", _event_uid(ev))
-    ice.add("summary", ev.title)
-    ice.add("dtstart", ev.start_dt)
-    ice.add("dtend", ev.end_dt)
-    if ev.location:
-        ice.add("location", ev.location)
-    desc = []
-    if ev.status:
-        desc.append(f"Status: {ev.status}")
-    if ev.remark:
-        desc.append(f"Remark: {ev.remark}")
-    ice.add("description", "\n".join(desc) + "\nSource: krutooschool.com")
-    cal.add_component(ice)
-    return cal
+    vevent = ICEvent()
+    vevent.add("uid", event.uid)
+    vevent.add("summary", event.title)
+    vevent.add("dtstart", event.start_dt)
+    vevent.add("dtend", event.end_dt)
+    if event.location:
+        vevent.add("location", event.location)
+    vevent.add("description", event.description)
+    cal.add_component(vevent)
+    return cal.to_ical().decode("utf-8")
 
 
-def upsert_events(url: str, username: str, app_password: str, calendar_name: Optional[str], events: List[ClassEvent]) -> None:
+def _fingerprint(ical_text: str) -> tuple:
+    """The parts of an event that matter; used to skip writes when nothing changed."""
+    cal = ICalendar.from_ical(ical_text)
+    for component in cal.walk("VEVENT"):
+        return tuple(
+            str(component.get(key, "")) if key not in ("DTSTART", "DTEND") else component.decoded(key).isoformat()
+            for key in ("SUMMARY", "DTSTART", "DTEND", "LOCATION", "DESCRIPTION")
+        )
+    return ()
+
+
+def _find_or_create_calendar(principal, name: Optional[str]):
+    calendars = principal.calendars()
+    if not name:
+        if not calendars:
+            raise RuntimeError("The iCloud account has no calendars; set ICLOUD_CALENDAR_NAME to create one.")
+        return calendars[0]
+    for cal in calendars:
+        if cal.get_display_name() == name:
+            return cal
+    return principal.make_calendar(name=name)
+
+
+def upsert_events(
+    username: str,
+    app_password: str,
+    events: Iterable[ClassEvent],
+    calendar_name: Optional[str] = None,
+    url: str = ICLOUD_URL,
+) -> SyncReport:
+    """Create new lessons and update changed ones in place. Lessons are matched by UID."""
+    import caldav  # imported lazily so parsing and tests do not need it
+
     client = caldav.DAVClient(url=url, username=username, password=app_password)
-    principal = client.principal()
-    calendar = _find_or_create_calendar(principal, calendar_name)
+    calendar = _find_or_create_calendar(client.principal(), calendar_name)
+    return sync_calendar(calendar, events)
 
-    existing = {item.vobject_instance.vevent.uid.value: item for item in calendar.events()}  # type: ignore
 
-    for ev in events:
-        ical = _serialize_event(ev)
-        uid = _event_uid(ev)
-        if uid in existing:
-            existing[uid].delete()
-        calendar.add_event(ical.to_ical().decode("utf-8"))
+def sync_calendar(calendar, events: Iterable[ClassEvent]) -> SyncReport:
+    """The CalDAV-agnostic part of :func:`upsert_events` (takes any caldav.Calendar-like object)."""
+    existing: Dict[str, object] = {}
+    for item in calendar.events():
+        uid = item.icalendar_component.get("UID")
+        if uid and str(uid).endswith("@krutoosync"):
+            existing[str(uid)] = item
 
+    report = SyncReport()
+    for event in events:
+        ical = to_ical(event)
+        current = existing.get(event.uid)
+        if current is None:
+            calendar.save_event(ical)
+            report.created += 1
+        elif _fingerprint(current.data) == _fingerprint(ical):
+            report.unchanged += 1
+        else:
+            current.data = ical
+            current.save()
+            report.updated += 1
+    return report
